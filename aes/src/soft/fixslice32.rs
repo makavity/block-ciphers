@@ -1374,10 +1374,10 @@ fn rotate_rows_and_columns_2_2(x: u32) -> u32 {
 #[cfg(feature = "hazmat")]
 pub(crate) mod hazmat {
     use super::{
-        bitslice, inv_bitslice, inv_mix_columns_0, inv_shift_rows_1, inv_sub_bytes, mix_columns_0,
-        shift_rows_1, sub_bytes, sub_bytes_nots, State,
+        State, bitslice, inv_bitslice, inv_mix_columns_0, inv_shift_rows_1, inv_sub_bytes,
+        mix_columns_0, shift_rows_1, sub_bytes, sub_bytes_nots,
     };
-    use crate::{Block, Block8};
+    use crate::hazmat::{Block, Block8};
 
     /// XOR the `src` block into the `dst` block in-place.
     fn xor_in_place(dst: &mut Block, src: &Block) {

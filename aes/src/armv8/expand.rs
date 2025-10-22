@@ -1,6 +1,11 @@
 //! AES key expansion support.
+#![allow(unsafe_op_in_unsafe_fn)]
 
 use core::{arch::aarch64::*, mem, slice};
+
+pub(super) type Aes128RoundKeys = [uint8x16_t; 11];
+pub(super) type Aes192RoundKeys = [uint8x16_t; 13];
+pub(super) type Aes256RoundKeys = [uint8x16_t; 15];
 
 /// There are 4 AES words in a block.
 const BLOCK_WORDS: usize = 4;
@@ -18,8 +23,10 @@ pub unsafe fn expand_key<const L: usize, const N: usize>(key: &[u8; L]) -> [uint
 
     let mut expanded_keys: [uint8x16_t; N] = mem::zeroed();
 
-    let columns =
-        slice::from_raw_parts_mut(expanded_keys.as_mut_ptr() as *mut u32, N * BLOCK_WORDS);
+    // Sanity check, as this is required in order for the subsequent conversion to be sound.
+    const _: () = assert!(mem::align_of::<uint8x16_t>() >= mem::align_of::<u32>());
+    let keys_ptr: *mut u32 = expanded_keys.as_mut_ptr().cast();
+    let columns = slice::from_raw_parts_mut(keys_ptr, N * BLOCK_WORDS);
 
     for (i, chunk) in key.chunks_exact(WORD_SIZE).enumerate() {
         columns[i] = u32::from_ne_bytes(chunk.try_into().unwrap());
@@ -50,14 +57,17 @@ pub unsafe fn expand_key<const L: usize, const N: usize>(key: &[u8; L]) -> [uint
 /// This is the reverse of the encryption keys, with the Inverse Mix Columns
 /// operation applied to all but the first and last expanded key.
 #[target_feature(enable = "aes")]
-pub(super) unsafe fn inv_expanded_keys<const N: usize>(expanded_keys: &mut [uint8x16_t; N]) {
+pub(super) unsafe fn inv_expanded_keys<const N: usize>(keys: &[uint8x16_t; N]) -> [uint8x16_t; N] {
     assert!(N == 11 || N == 13 || N == 15);
 
-    for ek in expanded_keys.iter_mut().take(N - 1).skip(1) {
-        *ek = vaesimcq_u8(*ek);
+    let mut inv_keys: [uint8x16_t; N] = core::mem::zeroed();
+    inv_keys[0] = keys[N - 1];
+    for i in 1..N - 1 {
+        inv_keys[i] = vaesimcq_u8(keys[N - 1 - i]);
     }
+    inv_keys[N - 1] = keys[0];
 
-    expanded_keys.reverse();
+    inv_keys
 }
 
 /// Sub bytes for a single AES word: used for key expansion.

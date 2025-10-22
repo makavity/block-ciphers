@@ -22,8 +22,10 @@
 pub use cipher;
 
 use cipher::{
-    consts::{U32, U8},
-    AlgorithmName, BlockCipher, InvalidLength, Key, KeyInit, KeySizeUser,
+    AlgorithmName, Block, BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherDecrypt,
+    BlockCipherEncBackend, BlockCipherEncClosure, BlockCipherEncrypt, BlockSizeUser, InOut,
+    InvalidLength, Key, KeyInit, KeySizeUser, ParBlocksSizeUser,
+    consts::{U1, U8, U32},
 };
 use core::fmt;
 
@@ -83,28 +85,28 @@ impl Rc2 {
             .wrapping_add(r[3] & r[2])
             .wrapping_add(!r[3] & r[1]);
         *j += 1;
-        r[0] = (r[0] << 1) | (r[0] >> 15);
+        r[0] = r[0].rotate_left(1);
 
         r[1] = r[1]
             .wrapping_add(self.keys[*j])
             .wrapping_add(r[0] & r[3])
             .wrapping_add(!r[0] & r[2]);
         *j += 1;
-        r[1] = (r[1] << 2) | (r[1] >> 14);
+        r[1] = r[1].rotate_left(2);
 
         r[2] = r[2]
             .wrapping_add(self.keys[*j])
             .wrapping_add(r[1] & r[0])
             .wrapping_add(!r[1] & r[3]);
         *j += 1;
-        r[2] = (r[2] << 3) | (r[2] >> 13);
+        r[2] = r[2].rotate_left(3);
 
         r[3] = r[3]
             .wrapping_add(self.keys[*j])
             .wrapping_add(r[2] & r[1])
             .wrapping_add(!r[2] & r[0]);
         *j += 1;
-        r[3] = (r[3] << 5) | (r[3] >> 11);
+        r[3] = r[3].rotate_left(5);
     }
 
     fn mash(&self, r: &mut [u16; 4]) {
@@ -115,28 +117,28 @@ impl Rc2 {
     }
 
     fn reverse_mix(&self, r: &mut [u16; 4], j: &mut usize) {
-        r[3] = (r[3] << 11) | (r[3] >> 5);
+        r[3] = r[3].rotate_right(5);
         r[3] = r[3]
             .wrapping_sub(self.keys[*j])
             .wrapping_sub(r[2] & r[1])
             .wrapping_sub(!r[2] & r[0]);
         *j -= 1;
 
-        r[2] = (r[2] << 13) | (r[2] >> 3);
+        r[2] = r[2].rotate_right(3);
         r[2] = r[2]
             .wrapping_sub(self.keys[*j])
             .wrapping_sub(r[1] & r[0])
             .wrapping_sub(!r[1] & r[3]);
         *j -= 1;
 
-        r[1] = (r[1] << 14) | (r[1] >> 2);
+        r[1] = r[1].rotate_right(2);
         r[1] = r[1]
             .wrapping_sub(self.keys[*j])
             .wrapping_sub(r[0] & r[3])
             .wrapping_sub(!r[0] & r[2]);
         *j -= 1;
 
-        r[0] = (r[0] << 15) | (r[0] >> 1);
+        r[0] = r[0].rotate_right(1);
         r[0] = r[0]
             .wrapping_sub(self.keys[*j])
             .wrapping_sub(r[3] & r[2])
@@ -151,8 +153,6 @@ impl Rc2 {
         r[0] = r[0].wrapping_sub(self.keys[(r[3] & 63) as usize]);
     }
 }
-
-impl BlockCipher for Rc2 {}
 
 impl KeySizeUser for Rc2 {
     type KeySize = U32;
@@ -172,6 +172,84 @@ impl KeyInit for Rc2 {
     }
 }
 
+impl BlockSizeUser for Rc2 {
+    type BlockSize = U8;
+}
+
+impl ParBlocksSizeUser for Rc2 {
+    type ParBlocksSize = U1;
+}
+
+impl BlockCipherEncrypt for Rc2 {
+    #[inline]
+    fn encrypt_with_backend(&self, f: impl BlockCipherEncClosure<BlockSize = Self::BlockSize>) {
+        f.call(self)
+    }
+}
+
+impl BlockCipherEncBackend for Rc2 {
+    #[inline]
+    fn encrypt_block(&self, mut block: InOut<'_, '_, Block<Self>>) {
+        let b = block.get_in();
+        let mut b = [
+            u16::from_le_bytes(b[0..2].try_into().unwrap()),
+            u16::from_le_bytes(b[2..4].try_into().unwrap()),
+            u16::from_le_bytes(b[4..6].try_into().unwrap()),
+            u16::from_le_bytes(b[6..8].try_into().unwrap()),
+        ];
+
+        let mut j = 0;
+
+        for i in 0..16 {
+            self.mix(&mut b, &mut j);
+            if i == 4 || i == 10 {
+                self.mash(&mut b);
+            }
+        }
+
+        let block = block.get_out();
+        block[0..2].copy_from_slice(&b[0].to_le_bytes());
+        block[2..4].copy_from_slice(&b[1].to_le_bytes());
+        block[4..6].copy_from_slice(&b[2].to_le_bytes());
+        block[6..8].copy_from_slice(&b[3].to_le_bytes());
+    }
+}
+
+impl BlockCipherDecrypt for Rc2 {
+    #[inline]
+    fn decrypt_with_backend(&self, f: impl BlockCipherDecClosure<BlockSize = Self::BlockSize>) {
+        f.call(self)
+    }
+}
+
+impl BlockCipherDecBackend for Rc2 {
+    #[inline]
+    fn decrypt_block(&self, mut block: InOut<'_, '_, Block<Self>>) {
+        let b = block.get_in();
+        let mut b = [
+            u16::from_le_bytes(b[0..2].try_into().unwrap()),
+            u16::from_le_bytes(b[2..4].try_into().unwrap()),
+            u16::from_le_bytes(b[4..6].try_into().unwrap()),
+            u16::from_le_bytes(b[6..8].try_into().unwrap()),
+        ];
+
+        let mut j = 63;
+
+        for i in 0..16 {
+            self.reverse_mix(&mut b, &mut j);
+            if i == 4 || i == 10 {
+                self.reverse_mash(&mut b);
+            }
+        }
+
+        let block = block.get_out();
+        block[0..2].copy_from_slice(&b[0].to_le_bytes());
+        block[2..4].copy_from_slice(&b[1].to_le_bytes());
+        block[4..6].copy_from_slice(&b[2].to_le_bytes());
+        block[6..8].copy_from_slice(&b[3].to_le_bytes());
+    }
+}
+
 impl fmt::Debug for Rc2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Rc2 { ... }")
@@ -184,66 +262,12 @@ impl AlgorithmName for Rc2 {
     }
 }
 
-#[cfg(feature = "zeroize")]
-#[cfg_attr(docsrs, doc(cfg(feature = "zeroize")))]
 impl Drop for Rc2 {
     fn drop(&mut self) {
+        #[cfg(feature = "zeroize")]
         self.keys.zeroize();
     }
 }
 
 #[cfg(feature = "zeroize")]
-#[cfg_attr(docsrs, doc(cfg(feature = "zeroize")))]
 impl ZeroizeOnDrop for Rc2 {}
-
-cipher::impl_simple_block_encdec!(
-    Rc2, U8, cipher, block,
-    encrypt: {
-        let b = block.get_in();
-        let mut b = [
-            u16::from_le_bytes(b[0..2].try_into().unwrap()),
-            u16::from_le_bytes(b[2..4].try_into().unwrap()),
-            u16::from_le_bytes(b[4..6].try_into().unwrap()),
-            u16::from_le_bytes(b[6..8].try_into().unwrap()),
-        ];
-
-        let mut j = 0;
-
-        for i in 0..16 {
-            cipher.mix(&mut b, &mut j);
-            if i == 4 || i == 10 {
-                cipher.mash(&mut b);
-            }
-        }
-
-        let block = block.get_out();
-        block[0..2].copy_from_slice(&b[0].to_le_bytes());
-        block[2..4].copy_from_slice(&b[1].to_le_bytes());
-        block[4..6].copy_from_slice(&b[2].to_le_bytes());
-        block[6..8].copy_from_slice(&b[3].to_le_bytes());
-    }
-    decrypt: {
-        let b = block.get_in();
-        let mut b = [
-            u16::from_le_bytes(b[0..2].try_into().unwrap()),
-            u16::from_le_bytes(b[2..4].try_into().unwrap()),
-            u16::from_le_bytes(b[4..6].try_into().unwrap()),
-            u16::from_le_bytes(b[6..8].try_into().unwrap()),
-        ];
-
-        let mut j = 63;
-
-        for i in 0..16 {
-            cipher.reverse_mix(&mut b, &mut j);
-            if i == 4 || i == 10 {
-                cipher.reverse_mash(&mut b);
-            }
-        }
-
-        let block = block.get_out();
-        block[0..2].copy_from_slice(&b[0].to_le_bytes());
-        block[2..4].copy_from_slice(&b[1].to_le_bytes());
-        block[4..6].copy_from_slice(&b[2].to_le_bytes());
-        block[6..8].copy_from_slice(&b[3].to_le_bytes());
-    }
-);

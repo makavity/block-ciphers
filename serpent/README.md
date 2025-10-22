@@ -10,8 +10,6 @@
 
 Experimental pure Rust implementation of the [Serpent block cipher][1].
 
-[Documentation][docs-link]
-
 <img src="https://raw.githubusercontent.com/RustCrypto/meta/master/img/block-ciphers/serpent.png" width="200px">
 
 ## ⚠️ Security Warning: [Hazmat!][hazmat-link]
@@ -26,17 +24,13 @@ architectures.
 
 USE AT YOUR OWN RISK!
 
-## Minimum Supported Rust Version
+## Configuration flags
 
-Rust **1.65** or higher.
+You can modify crate using the following configuration flags:
 
-Minimum supported Rust version can be changed in the future, but it will be
-done with a minor version bump.
+- `serpent_no_unroll`: do not unroll rounds loop. Reduces binary size at the cost of slightly lower performance.
 
-## SemVer Policy
-
-- All on-by-default features of this library are covered by SemVer
-- MSRV is considered exempt from SemVer as noted above
+The flag can be enabled using RUSTFLAGS environmental variable (e.g. RUSTFLAGS="--cfg serpent_no_unroll") or by modifying .cargo/config.
 
 ## License
 
@@ -60,7 +54,7 @@ dual licensed as above, without any additional terms or conditions.
 [docs-image]: https://docs.rs/serpent/badge.svg
 [docs-link]: https://docs.rs/serpent/
 [license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
-[rustc-image]: https://img.shields.io/badge/rustc-1.65+-blue.svg
+[rustc-image]: https://img.shields.io/badge/rustc-1.85+-blue.svg
 [hazmat-image]: https://img.shields.io/badge/crypto-hazmat%E2%9A%A0-red.svg
 [hazmat-link]: https://github.com/RustCrypto/meta/blob/master/HAZMAT.md
 [chat-image]: https://img.shields.io/badge/zulip-join_chat-blue.svg

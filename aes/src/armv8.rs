@@ -17,19 +17,62 @@ mod expand;
 #[cfg(test)]
 mod test_expand;
 
-use self::{
-    encdec::{decrypt1, decrypt8, encrypt1, encrypt8},
-    expand::{expand_key, inv_expanded_keys},
-};
-use crate::{Block, Block8};
 use cipher::{
-    consts::{U16, U24, U32, U8},
-    inout::InOut,
-    AlgorithmName, BlockBackend, BlockCipher, BlockCipherDecrypt, BlockCipherEncrypt, BlockClosure,
-    BlockSizeUser, Key, KeyInit, KeySizeUser, ParBlocksSizeUser,
+    AlgorithmName, BlockCipherDecClosure, BlockCipherDecrypt, BlockCipherEncClosure,
+    BlockCipherEncrypt, BlockSizeUser, Key, KeyInit, KeySizeUser,
+    consts::{self, U16, U24, U32},
+    crypto_common::WeakKeyError,
 };
-use core::arch::aarch64::*;
 use core::fmt;
+
+pub(crate) mod features {
+    cpufeatures::new!(features_aes, "aes");
+    pub(crate) mod aes {
+        pub use super::features_aes::*;
+    }
+}
+
+impl_backends!(
+    enc_name = Aes128BackEnc,
+    dec_name = Aes128BackDec,
+    key_size = consts::U16,
+    keys_ty = expand::Aes128RoundKeys,
+    par_size = consts::U21,
+    expand_keys = expand::expand_key,
+    inv_keys = expand::inv_expanded_keys,
+    encrypt = encdec::encrypt,
+    encrypt_par = encdec::encrypt_par,
+    decrypt = encdec::decrypt,
+    decrypt_par = encdec::decrypt_par,
+);
+
+impl_backends!(
+    enc_name = Aes192BackEnc,
+    dec_name = Aes192BackDec,
+    key_size = consts::U24,
+    keys_ty = expand::Aes192RoundKeys,
+    par_size = consts::U19,
+    expand_keys = expand::expand_key,
+    inv_keys = expand::inv_expanded_keys,
+    encrypt = encdec::encrypt,
+    encrypt_par = encdec::encrypt_par,
+    decrypt = encdec::decrypt,
+    decrypt_par = encdec::decrypt_par,
+);
+
+impl_backends!(
+    enc_name = Aes256BackEnc,
+    dec_name = Aes256BackDec,
+    key_size = consts::U32,
+    keys_ty = expand::Aes256RoundKeys,
+    par_size = consts::U17,
+    expand_keys = expand::expand_key,
+    inv_keys = expand::inv_expanded_keys,
+    encrypt = encdec::encrypt,
+    encrypt_par = encdec::encrypt_par,
+    decrypt = encdec::decrypt,
+    decrypt_par = encdec::decrypt_par,
+);
 
 macro_rules! define_aes_impl {
     (
@@ -46,23 +89,9 @@ macro_rules! define_aes_impl {
         #[doc = "block cipher"]
         #[derive(Clone)]
         pub struct $name {
-            encrypt: $name_enc,
-            decrypt: $name_dec,
+            encrypt: $name_back_enc,
+            decrypt: $name_back_dec,
         }
-
-        impl $name {
-            #[inline(always)]
-            pub(crate) fn get_enc_backend(&self) -> $name_back_enc<'_> {
-                self.encrypt.get_enc_backend()
-            }
-
-            #[inline(always)]
-            pub(crate) fn get_dec_backend(&self) -> $name_back_dec<'_> {
-                self.decrypt.get_dec_backend()
-            }
-        }
-
-        impl BlockCipher for $name {}
 
         impl KeySizeUser for $name {
             type KeySize = $key_size;
@@ -71,16 +100,22 @@ macro_rules! define_aes_impl {
         impl KeyInit for $name {
             #[inline]
             fn new(key: &Key<Self>) -> Self {
-                let encrypt = $name_enc::new(key);
-                let decrypt = $name_dec::from(&encrypt);
+                let encrypt = $name_back_enc::new(key);
+                let decrypt = $name_back_dec::from(encrypt.clone());
                 Self { encrypt, decrypt }
+            }
+
+            #[inline]
+            fn weak_key_test(key: &Key<Self>) -> Result<(), WeakKeyError> {
+                crate::weak_key_test(&key.0)
             }
         }
 
         impl From<$name_enc> for $name {
             #[inline]
             fn from(encrypt: $name_enc) -> $name {
-                let decrypt = (&encrypt).into();
+                let encrypt = encrypt.backend.clone();
+                let decrypt = encrypt.clone().into();
                 Self { encrypt, decrypt }
             }
         }
@@ -88,8 +123,8 @@ macro_rules! define_aes_impl {
         impl From<&$name_enc> for $name {
             #[inline]
             fn from(encrypt: &$name_enc) -> $name {
-                let decrypt = encrypt.into();
-                let encrypt = encrypt.clone();
+                let encrypt = encrypt.backend.clone();
+                let decrypt = encrypt.clone().into();
                 Self { encrypt, decrypt }
             }
         }
@@ -99,14 +134,14 @@ macro_rules! define_aes_impl {
         }
 
         impl BlockCipherEncrypt for $name {
-            fn encrypt_with_backend(&self, f: impl BlockClosure<BlockSize = U16>) {
-                self.encrypt.encrypt_with_backend(f)
+            fn encrypt_with_backend(&self, f: impl BlockCipherEncClosure<BlockSize = U16>) {
+                f.call(&self.encrypt)
             }
         }
 
         impl BlockCipherDecrypt for $name {
-            fn decrypt_with_backend(&self, f: impl BlockClosure<BlockSize = U16>) {
-                self.decrypt.decrypt_with_backend(f)
+            fn decrypt_with_backend(&self, f: impl BlockCipherDecClosure<BlockSize = U16>) {
+                f.call(&self.decrypt)
             }
         }
 
@@ -122,6 +157,16 @@ macro_rules! define_aes_impl {
             }
         }
 
+        impl Drop for $name {
+            #[inline]
+            fn drop(&mut self) {
+                #[cfg(feature = "zeroize")]
+                unsafe {
+                    zeroize::zeroize_flat_type(self);
+                }
+            }
+        }
+
         #[cfg(feature = "zeroize")]
         impl zeroize::ZeroizeOnDrop for $name {}
 
@@ -129,17 +174,8 @@ macro_rules! define_aes_impl {
         #[doc = "block cipher (encrypt-only)"]
         #[derive(Clone)]
         pub struct $name_enc {
-            round_keys: [uint8x16_t; $rounds],
+            backend: $name_back_enc,
         }
-
-        impl $name_enc {
-            #[inline(always)]
-            pub(crate) fn get_enc_backend(&self) -> $name_back_enc<'_> {
-                $name_back_enc(self)
-            }
-        }
-
-        impl BlockCipher for $name_enc {}
 
         impl KeySizeUser for $name_enc {
             type KeySize = $key_size;
@@ -148,9 +184,13 @@ macro_rules! define_aes_impl {
         impl KeyInit for $name_enc {
             #[inline]
             fn new(key: &Key<Self>) -> Self {
-                Self {
-                    round_keys: unsafe { expand_key(key.as_ref()) },
-                }
+                let backend = $name_back_enc::new(key);
+                Self { backend }
+            }
+
+            #[inline]
+            fn weak_key_test(key: &Key<Self>) -> Result<(), WeakKeyError> {
+                crate::weak_key_test(&key.0)
             }
         }
 
@@ -159,8 +199,8 @@ macro_rules! define_aes_impl {
         }
 
         impl BlockCipherEncrypt for $name_enc {
-            fn encrypt_with_backend(&self, f: impl BlockClosure<BlockSize = U16>) {
-                f.call(&mut self.get_enc_backend())
+            fn encrypt_with_backend(&self, f: impl BlockCipherEncClosure<BlockSize = U16>) {
+                f.call(&self.backend)
             }
         }
 
@@ -180,7 +220,9 @@ macro_rules! define_aes_impl {
             #[inline]
             fn drop(&mut self) {
                 #[cfg(feature = "zeroize")]
-                zeroize::Zeroize::zeroize(&mut self.round_keys);
+                unsafe {
+                    zeroize::zeroize_flat_type(self);
+                }
             }
         }
 
@@ -191,17 +233,8 @@ macro_rules! define_aes_impl {
         #[doc = "block cipher (decrypt-only)"]
         #[derive(Clone)]
         pub struct $name_dec {
-            round_keys: [uint8x16_t; $rounds],
+            backend: $name_back_dec,
         }
-
-        impl $name_dec {
-            #[inline(always)]
-            pub(crate) fn get_dec_backend(&self) -> $name_back_dec<'_> {
-                $name_back_dec(self)
-            }
-        }
-
-        impl BlockCipher for $name_dec {}
 
         impl KeySizeUser for $name_dec {
             type KeySize = $key_size;
@@ -210,7 +243,14 @@ macro_rules! define_aes_impl {
         impl KeyInit for $name_dec {
             #[inline]
             fn new(key: &Key<Self>) -> Self {
-                $name_enc::new(key).into()
+                let encrypt = $name_back_enc::new(key);
+                let backend = encrypt.clone().into();
+                Self { backend }
+            }
+
+            #[inline]
+            fn weak_key_test(key: &Key<Self>) -> Result<(), WeakKeyError> {
+                crate::weak_key_test(&key.0)
             }
         }
 
@@ -222,10 +262,9 @@ macro_rules! define_aes_impl {
         }
 
         impl From<&$name_enc> for $name_dec {
-            fn from(enc: &$name_enc) -> $name_dec {
-                let mut round_keys = enc.round_keys;
-                unsafe { inv_expanded_keys(&mut round_keys) };
-                Self { round_keys }
+            fn from(encrypt: &$name_enc) -> $name_dec {
+                let backend = encrypt.backend.clone().into();
+                Self { backend }
             }
         }
 
@@ -234,8 +273,8 @@ macro_rules! define_aes_impl {
         }
 
         impl BlockCipherDecrypt for $name_dec {
-            fn decrypt_with_backend(&self, f: impl BlockClosure<BlockSize = U16>) {
-                f.call(&mut self.get_dec_backend());
+            fn decrypt_with_backend(&self, f: impl BlockCipherDecClosure<BlockSize = U16>) {
+                f.call(&self.backend);
             }
         }
 
@@ -255,60 +294,14 @@ macro_rules! define_aes_impl {
             #[inline]
             fn drop(&mut self) {
                 #[cfg(feature = "zeroize")]
-                zeroize::Zeroize::zeroize(&mut self.round_keys);
+                unsafe {
+                    zeroize::zeroize_flat_type(self);
+                }
             }
         }
 
         #[cfg(feature = "zeroize")]
         impl zeroize::ZeroizeOnDrop for $name_dec {}
-
-        pub(crate) struct $name_back_enc<'a>(&'a $name_enc);
-
-        impl<'a> BlockSizeUser for $name_back_enc<'a> {
-            type BlockSize = U16;
-        }
-
-        impl<'a> ParBlocksSizeUser for $name_back_enc<'a> {
-            type ParBlocksSize = U8;
-        }
-
-        impl<'a> BlockBackend for $name_back_enc<'a> {
-            #[inline(always)]
-            fn proc_block(&mut self, block: InOut<'_, '_, Block>) {
-                unsafe {
-                    encrypt1(&self.0.round_keys, block);
-                }
-            }
-
-            #[inline(always)]
-            fn proc_par_blocks(&mut self, blocks: InOut<'_, '_, Block8>) {
-                unsafe { encrypt8(&self.0.round_keys, blocks) }
-            }
-        }
-
-        pub(crate) struct $name_back_dec<'a>(&'a $name_dec);
-
-        impl<'a> BlockSizeUser for $name_back_dec<'a> {
-            type BlockSize = U16;
-        }
-
-        impl<'a> ParBlocksSizeUser for $name_back_dec<'a> {
-            type ParBlocksSize = U8;
-        }
-
-        impl<'a> BlockBackend for $name_back_dec<'a> {
-            #[inline(always)]
-            fn proc_block(&mut self, block: InOut<'_, '_, Block>) {
-                unsafe {
-                    decrypt1(&self.0.round_keys, block);
-                }
-            }
-
-            #[inline(always)]
-            fn proc_par_blocks(&mut self, blocks: InOut<'_, '_, Block8>) {
-                unsafe { decrypt8(&self.0.round_keys, blocks) }
-            }
-        }
     };
 }
 

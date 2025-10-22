@@ -24,7 +24,7 @@
 #[cfg(feature = "cipher")]
 pub use cipher;
 
-use crate::consts::{H13, H21, H29, H5};
+use crate::consts::{H5, H13, H21, H29};
 use core::{mem::swap, num::Wrapping};
 
 #[cfg(feature = "cipher")]
@@ -113,7 +113,7 @@ pub fn belt_wblock_enc(data: &mut [u8], key: &[u32; 8]) -> Result<(), InvalidLen
     }
 
     let len = data.len();
-    let n = (len + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let n = len.div_ceil(BLOCK_SIZE);
     for i in 1..(2 * n + 1) {
         let s = data[..len - 1]
             .chunks_exact(BLOCK_SIZE)
@@ -141,7 +141,7 @@ pub fn belt_wblock_dec(data: &mut [u8], key: &[u32; 8]) -> Result<(), InvalidLen
     }
 
     let len = data.len();
-    let n = (len + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let n = len.div_ceil(BLOCK_SIZE);
     for i in (1..(2 * n + 1)).rev() {
         let tail_pos = len - BLOCK_SIZE;
         let s = Block::try_from(&data[tail_pos..]).unwrap();
@@ -170,7 +170,7 @@ pub struct InvalidLengthError;
 /// # Panics
 /// If length of `src` is not equal to `4 * N`.
 #[inline(always)]
-pub fn to_u32<const N: usize>(src: &[u8]) -> [u32; N] {
+fn to_u32<const N: usize>(src: &[u8]) -> [u32; N] {
     assert_eq!(src.len(), 4 * N);
     let mut res = [0u32; N];
     res.iter_mut()

@@ -1,14 +1,21 @@
-use super::consts::{Table, DEC_TABLE, ENC_TABLE, RKEY_GEN};
+#![allow(unsafe_op_in_unsafe_fn)]
+
 use crate::{
-    consts::{P, P_INV},
     Block, Key,
+    consts::{P, P_INV},
+    fused_tables::{DEC_TABLE, ENC_TABLE, Table},
+    utils::KEYGEN,
 };
 use cipher::{
-    consts::{U16, U4},
+    BlockCipherDecBackend, BlockCipherEncBackend, BlockSizeUser, ParBlocks, ParBlocksSizeUser,
+    consts::{U4, U16},
     inout::InOut,
     typenum::Unsigned,
-    BlockBackend, BlockSizeUser, ParBlocks, ParBlocksSizeUser,
 };
+
+#[cfg(target_arch = "x86")]
+use core::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
 pub(super) type RoundKeys = [__m128i; 10];
@@ -61,7 +68,7 @@ unsafe fn transform(block: __m128i, table: &Table) -> __m128i {
     macro_rules! get {
         ($table:expr, $ind:expr, $i:expr) => {{
             let idx = _mm_extract_epi16($ind, $i) as u16 as usize;
-            let p = &($table.0[idx]) as *const u8 as *const __m128i;
+            let p = $table.0.as_ptr().add(idx).cast();
             // correct alignment of `p` is guaranteed since offset values
             // are shifted by 4 bits left and the table is aligned to 16 bytes
             debug_assert_eq!(p as usize % 16, 0);
@@ -105,7 +112,7 @@ unsafe fn transform(block: __m128i, table: &Table) -> __m128i {
 pub(super) fn expand_enc_keys(key: &Key) -> RoundKeys {
     macro_rules! next_const {
         ($i:expr) => {{
-            let p = RKEY_GEN.0.as_ptr() as *const __m128i;
+            let p = KEYGEN.as_ptr() as *const __m128i;
             // correct alignment of `p` is guaranteed since the table
             // is aligned to 16 bytes
             let p = p.add($i);
@@ -161,17 +168,17 @@ pub(super) fn inv_enc_keys(enc_keys: &RoundKeys) -> RoundKeys {
 
 pub(crate) struct EncBackend<'a>(pub(crate) &'a RoundKeys);
 
-impl<'a> BlockSizeUser for EncBackend<'a> {
+impl BlockSizeUser for EncBackend<'_> {
     type BlockSize = U16;
 }
 
-impl<'a> ParBlocksSizeUser for EncBackend<'a> {
+impl ParBlocksSizeUser for EncBackend<'_> {
     type ParBlocksSize = ParBlocksSize;
 }
 
-impl<'a> BlockBackend for EncBackend<'a> {
+impl BlockCipherEncBackend for EncBackend<'_> {
     #[inline]
-    fn proc_block(&mut self, block: InOut<'_, '_, Block>) {
+    fn encrypt_block(&self, block: InOut<'_, '_, Block>) {
         let k = self.0;
         unsafe {
             let (in_ptr, out_ptr) = block.into_raw();
@@ -187,7 +194,7 @@ impl<'a> BlockBackend for EncBackend<'a> {
     }
 
     #[inline]
-    fn proc_par_blocks(&mut self, blocks: InOut<'_, '_, ParBlocks<Self>>) {
+    fn encrypt_par_blocks(&self, blocks: InOut<'_, '_, ParBlocks<Self>>) {
         let k = self.0;
         unsafe {
             let (in_ptr, out_ptr) = blocks.into_raw();
@@ -220,17 +227,17 @@ impl<'a> BlockBackend for EncBackend<'a> {
 
 pub(crate) struct DecBackend<'a>(pub(crate) &'a RoundKeys);
 
-impl<'a> BlockSizeUser for DecBackend<'a> {
+impl BlockSizeUser for DecBackend<'_> {
     type BlockSize = U16;
 }
 
-impl<'a> ParBlocksSizeUser for DecBackend<'a> {
+impl ParBlocksSizeUser for DecBackend<'_> {
     type ParBlocksSize = ParBlocksSize;
 }
 
-impl<'a> BlockBackend for DecBackend<'a> {
+impl BlockCipherDecBackend for DecBackend<'_> {
     #[inline]
-    fn proc_block(&mut self, block: InOut<'_, '_, Block>) {
+    fn decrypt_block(&self, block: InOut<'_, '_, Block>) {
         let k = self.0;
         unsafe {
             let (in_ptr, out_ptr) = block.into_raw();
@@ -253,7 +260,7 @@ impl<'a> BlockBackend for DecBackend<'a> {
     }
 
     #[inline]
-    fn proc_par_blocks(&mut self, blocks: InOut<'_, '_, ParBlocks<Self>>) {
+    fn decrypt_par_blocks(&self, blocks: InOut<'_, '_, ParBlocks<Self>>) {
         let k = self.0;
         unsafe {
             let (in_ptr, out_ptr) = blocks.into_raw();

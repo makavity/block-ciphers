@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.0 (UNRELEASED)
+### Changed
+- Bump `cipher` dependency to v0.5
+- Edition changed to 2024 and MSRV bumped to 1.85 ([#472])
+- Relax MSRV policy and allow MSRV bumps in patch releases ([#477])
+- Use const eval to generate tables ([#451])
+
+### Fixed
+- Fix kuznyechik 32bit build ([#406])
+
+[#406]: https://github.com/RustCrypto/block-ciphers/pull/406
+[#451]: https://github.com/RustCrypto/block-ciphers/pull/451
+[#472]: https://github.com/RustCrypto/block-ciphers/pull/472
+[#477]: https://github.com/RustCrypto/block-ciphers/pull/477
+
 ## 0.8.2 (2023-08-06)
 ### Fixed
 - `Drop` implementations in the software backend with enabled `zeroize` feature ([#311])

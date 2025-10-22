@@ -1,0 +1,25 @@
+[package]
+name = "xtea"
+version = "0.0.1-pre.0"
+description = "XTEA block cipher"
+authors = ["RustCrypto Developers"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+rust-version = "1.85"
+readme = "README.md"
+documentation = "https://docs.rs/xtea"
+repository = "https://github.com/RustCrypto/block-ciphers"
+keywords = ["crypto", "xtea", "block-cipher"]
+categories = ["cryptography", "no-std"]
+
+[dependencies]
+cipher = "0.5.0-rc.1"
+
+[dev-dependencies]
+cipher = { version = "0.5.0-rc.1", features = ["dev"] }
+
+[features]
+zeroize = ["cipher/zeroize"]
+
+[package.metadata.docs.rs]
+all-features = true

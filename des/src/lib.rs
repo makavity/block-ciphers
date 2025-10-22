@@ -20,13 +20,24 @@
 #![deny(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs, rust_2018_idioms)]
-#![allow(clippy::clone_on_copy)] // TODO: remove on migration to const generics
 
 pub use cipher;
 
 mod consts;
 mod des;
 mod tdes;
+mod utils;
 
 pub use crate::des::Des;
 pub use crate::tdes::{TdesEde2, TdesEde3, TdesEee2, TdesEee3};
+
+/// Checks whether the key is weak.
+///
+/// Returns 1 if the key is weak; otherwise, returns 0.
+fn weak_key_test(key: u64) -> u8 {
+    let mut is_weak = 0u8;
+    for &weak_key in crate::consts::WEAK_KEYS {
+        is_weak |= u8::from(key == weak_key);
+    }
+    is_weak
+}

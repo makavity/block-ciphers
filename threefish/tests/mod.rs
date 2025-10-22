@@ -1,9 +1,9 @@
 //! Test vectors from:
 //! https://github.com/weidai11/cryptopp/blob/master/TestVectors/threefish.txt
-#![cfg(featue = "cipher")]
+#![cfg(feature = "cipher")]
 use cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use hex_literal::hex;
-use threefish::{Threefish1024, Threefish256, Threefish512};
+use threefish::{Threefish256, Threefish512, Threefish1024};
 
 struct Vector {
     key: &'static [u8],
@@ -15,6 +15,7 @@ struct Vector {
 macro_rules! impl_test {
     {$name:ident, $cipher:ty, $tests:expr,} => {
         #[test]
+        #[allow(deprecated)] // uses `clone_from_slice`
         fn $name() {
             let vectors = $tests;
             for &Vector { key, tweak, pt, ct } in vectors.iter() {

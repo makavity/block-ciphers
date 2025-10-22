@@ -14,10 +14,12 @@ pub(crate) mod fixslice;
 
 use crate::Block;
 use cipher::{
+    AlgorithmName, BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherDecrypt,
+    BlockCipherEncBackend, BlockCipherEncClosure, BlockCipherEncrypt, BlockSizeUser, Key, KeyInit,
+    KeySizeUser, ParBlocksSizeUser,
     consts::{U16, U24, U32},
+    crypto_common::WeakKeyError,
     inout::InOut,
-    AlgorithmName, BlockBackend, BlockCipher, BlockCipherDecrypt, BlockCipherEncrypt, BlockClosure,
-    BlockSizeUser, Key, KeyInit, KeySizeUser, ParBlocksSizeUser,
 };
 use core::fmt;
 use fixslice::{BatchBlocks, FixsliceBlocks, FixsliceKeys128, FixsliceKeys192, FixsliceKeys256};
@@ -43,18 +45,6 @@ macro_rules! define_aes_impl {
             keys: $fixslice_keys,
         }
 
-        impl $name {
-            #[inline(always)]
-            pub(crate) fn get_enc_backend(&self) -> $name_back_enc<'_> {
-                $name_back_enc(self)
-            }
-
-            #[inline(always)]
-            pub(crate) fn get_dec_backend(&self) -> $name_back_dec<'_> {
-                $name_back_dec(self)
-            }
-        }
-
         impl KeySizeUser for $name {
             type KeySize = $key_size;
         }
@@ -66,23 +56,26 @@ macro_rules! define_aes_impl {
                     keys: $fixslice_key_schedule(key.into()),
                 }
             }
+
+            #[inline]
+            fn weak_key_test(key: &Key<Self>) -> Result<(), WeakKeyError> {
+                crate::weak_key_test(&key.0)
+            }
         }
 
         impl BlockSizeUser for $name {
             type BlockSize = U16;
         }
 
-        impl BlockCipher for $name {}
-
         impl BlockCipherEncrypt for $name {
-            fn encrypt_with_backend(&self, f: impl BlockClosure<BlockSize = U16>) {
-                f.call(&mut self.get_enc_backend())
+            fn encrypt_with_backend(&self, f: impl BlockCipherEncClosure<BlockSize = U16>) {
+                f.call(&$name_back_enc(self))
             }
         }
 
         impl BlockCipherDecrypt for $name {
-            fn decrypt_with_backend(&self, f: impl BlockClosure<BlockSize = U16>) {
-                f.call(&mut self.get_dec_backend())
+            fn decrypt_with_backend(&self, f: impl BlockCipherDecClosure<BlockSize = U16>) {
+                f.call(&$name_back_dec(self))
             }
         }
 
@@ -130,15 +123,6 @@ macro_rules! define_aes_impl {
             inner: $name,
         }
 
-        impl $name_enc {
-            #[inline(always)]
-            pub(crate) fn get_enc_backend(&self) -> $name_back_enc<'_> {
-                self.inner.get_enc_backend()
-            }
-        }
-
-        impl BlockCipher for $name_enc {}
-
         impl KeySizeUser for $name_enc {
             type KeySize = $key_size;
         }
@@ -149,6 +133,11 @@ macro_rules! define_aes_impl {
                 let inner = $name::new(key);
                 Self { inner }
             }
+
+            #[inline]
+            fn weak_key_test(key: &Key<Self>) -> Result<(), WeakKeyError> {
+                crate::weak_key_test(&key.0)
+            }
         }
 
         impl BlockSizeUser for $name_enc {
@@ -156,8 +145,8 @@ macro_rules! define_aes_impl {
         }
 
         impl BlockCipherEncrypt for $name_enc {
-            fn encrypt_with_backend(&self, f: impl BlockClosure<BlockSize = U16>) {
-                f.call(&mut self.get_enc_backend())
+            fn encrypt_with_backend(&self, f: impl BlockCipherEncClosure<BlockSize = U16>) {
+                f.call(&mut $name_back_enc(&self.inner))
             }
         }
 
@@ -183,15 +172,6 @@ macro_rules! define_aes_impl {
             inner: $name,
         }
 
-        impl $name_dec {
-            #[inline(always)]
-            pub(crate) fn get_dec_backend(&self) -> $name_back_dec<'_> {
-                self.inner.get_dec_backend()
-            }
-        }
-
-        impl BlockCipher for $name_dec {}
-
         impl KeySizeUser for $name_dec {
             type KeySize = $key_size;
         }
@@ -201,6 +181,11 @@ macro_rules! define_aes_impl {
             fn new(key: &Key<Self>) -> Self {
                 let inner = $name::new(key);
                 Self { inner }
+            }
+
+            #[inline]
+            fn weak_key_test(key: &Key<Self>) -> Result<(), WeakKeyError> {
+                crate::weak_key_test(&key.0)
             }
         }
 
@@ -225,8 +210,8 @@ macro_rules! define_aes_impl {
         }
 
         impl BlockCipherDecrypt for $name_dec {
-            fn decrypt_with_backend(&self, f: impl BlockClosure<BlockSize = U16>) {
-                f.call(&mut self.get_dec_backend());
+            fn decrypt_with_backend(&self, f: impl BlockCipherDecClosure<BlockSize = U16>) {
+                f.call(&$name_back_dec(&self.inner));
             }
         }
 
@@ -255,9 +240,9 @@ macro_rules! define_aes_impl {
             type ParBlocksSize = FixsliceBlocks;
         }
 
-        impl<'a> BlockBackend for $name_back_enc<'a> {
+        impl<'a> BlockCipherEncBackend for $name_back_enc<'a> {
             #[inline(always)]
-            fn proc_block(&mut self, mut block: InOut<'_, '_, Block>) {
+            fn encrypt_block(&self, mut block: InOut<'_, '_, Block>) {
                 let mut blocks = BatchBlocks::default();
                 blocks[0] = block.clone_in().into();
                 let res = $fixslice_encrypt(&self.0.keys, &blocks);
@@ -265,7 +250,7 @@ macro_rules! define_aes_impl {
             }
 
             #[inline(always)]
-            fn proc_par_blocks(&mut self, mut blocks: InOut<'_, '_, BatchBlocks>) {
+            fn encrypt_par_blocks(&self, mut blocks: InOut<'_, '_, BatchBlocks>) {
                 let res = $fixslice_encrypt(&self.0.keys, blocks.get_in());
                 *blocks.get_out() = res;
             }
@@ -281,9 +266,9 @@ macro_rules! define_aes_impl {
             type ParBlocksSize = FixsliceBlocks;
         }
 
-        impl<'a> BlockBackend for $name_back_dec<'a> {
+        impl<'a> BlockCipherDecBackend for $name_back_dec<'a> {
             #[inline(always)]
-            fn proc_block(&mut self, mut block: InOut<'_, '_, Block>) {
+            fn decrypt_block(&self, mut block: InOut<'_, '_, Block>) {
                 let mut blocks = BatchBlocks::default();
                 blocks[0] = block.clone_in();
                 let res = $fixslice_decrypt(&self.0.keys, &blocks);
@@ -291,7 +276,7 @@ macro_rules! define_aes_impl {
             }
 
             #[inline(always)]
-            fn proc_par_blocks(&mut self, mut blocks: InOut<'_, '_, BatchBlocks>) {
+            fn decrypt_par_blocks(&self, mut blocks: InOut<'_, '_, BatchBlocks>) {
                 let res = $fixslice_decrypt(&self.0.keys, blocks.get_in());
                 *blocks.get_out() = res;
             }
